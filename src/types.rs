@@ -79,14 +79,18 @@ pub trait RocksCacheClient {
     /// new return a new rockscache client
     /// for each key, rockscache client store a hash set,
     /// the hash set contains the following fields:
+    ///
     /// value: the value of the key
+    ///
     /// lockUntil: the time when the lock is released.
+    ///
     /// lockOwner: the owner of the lock.
+    ///
     /// if a thread query the cache for data, and no cache exists, it will lock the key before querying data in DB
     fn new(rdb: r2d2::Pool<Client>, options: Options) -> Self;
     /// tag_as_deleted a key, the key will expire after delay time.
     fn tag_as_deleted(&self, key: String) -> RedisResult<()>;
-    /// Fetch returns the value store in cache indexed by the key.
+    /// fetch returns the value store in cache indexed by the key.
     /// If the key doest not exists, call fn to get result, store it in cache, then return.
     fn fetch<F>(&self, key: String, expire: Duration, func: F) -> RedisResult<String>
     where
@@ -156,12 +160,14 @@ pub trait RocksCacheBatch {
     ) -> RedisResult<HashMap<i32, String>>
     where
         F: Fn(Vec<i32>) -> RedisResult<HashMap<i32, String>>;
-    /// FetchBatch returns a map with values indexed by index of keys list.
+    /// fetch_batch returns a map with values indexed by index of keys list.
     /// 1. the first parameter is the keys list of the data
     /// 2. the second parameter is the data expiration time
     /// 3. the third parameter is the batch data fetch fntion which is called when the cache does not exist
+    ///
     /// the parameter of the batch data fetch fntion is the index list of those keys
     /// missing in cache, which can be used to form a batch query for missing data.
+    ///
     /// the return value of the batch data fetch fntion is a map, with key of the
     /// index and value of the corresponding data in form of String
     fn fetch_batch<F>(
@@ -172,7 +178,7 @@ pub trait RocksCacheBatch {
     ) -> RedisResult<HashMap<i32, String>>
     where
         F: Fn(Vec<i32>) -> RedisResult<HashMap<i32, String>>;
-    /// TagAsDeletedBatch a key list, the keys in list will expire after delay time.
+    /// tag_as_deleted_batch a key list, the keys in list will expire after delay time.
     fn tag_as_deleted_batch(&self, keys: Vec<String>) -> RedisResult<()>;
 }
 

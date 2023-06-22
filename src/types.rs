@@ -87,7 +87,7 @@ pub trait RocksCacheClient {
     /// lockOwner: the owner of the lock.
     ///
     /// if a thread query the cache for data, and no cache exists, it will lock the key before querying data in DB
-    fn new(rdb: r2d2::Pool<Client>, options: Options) -> Self;
+    fn new(rdb: Client, options: Options) -> Self;
     /// tag_as_deleted a key, the key will expire after delay time.
     fn tag_as_deleted(&self, key: String) -> RedisResult<()>;
     /// fetch returns the value store in cache indexed by the key.

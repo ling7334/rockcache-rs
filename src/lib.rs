@@ -40,17 +40,22 @@ fn from_r2d2_err<T>(result: Result<T, r2d2::Error>) -> RedisResult<T> {
 }
 
 impl types::RocksCacheClient for Client {
-    fn new(pool: r2d2::Pool<RedisClient>, options: Options) -> Self {
+    fn new(rdb: RedisClient, options: Options) -> Self {
         if options.delay == Duration::ZERO || options.lock_expire == Duration::ZERO {
             panic!("cache options error: Delay and LockExpire should not be 0, you should call NewDefaultOptions() to get default options");
         }
 
         Client {
-            pool: pool,
+            pool: r2d2::Pool::builder()
+                .max_size(15)
+                .min_idle(Some(3))
+                .build(rdb)
+                .unwrap(),
             options: options,
             group: Group::new(),
         }
     }
+
     fn tag_as_deleted(&self, key: String) -> RedisResult<()> {
         if self.options.disable_cache_delete {
             return Ok(());
@@ -159,7 +164,6 @@ impl types::RocksCacheClient for Client {
                     Some(v) => {
                         println!("LockableValue::Value: {v} _fetch_new return old");
                         let self1 = self.clone();
-                        // let func1 = func.clone();
                         spawn(move || {
                             let _ = self1._fetch_new(key, ex, owner, func);
                         });
@@ -425,51 +429,47 @@ mod tests {
     }
     #[test]
     fn test_weak_fetch() {
-        let manager = RedisClient::open("redis://127.0.0.1:6379/").unwrap();
-        let pool = r2d2::Pool::builder().max_size(15).build(manager).unwrap();
-        let ref mut rdb = pool.clone().get().unwrap();
-        let rc = Client::new(pool, Options::default());
+        let rdb = RedisClient::open("redis://127.0.0.1:6379/").unwrap();
+        let rc = Client::new(rdb.clone(), Options::default());
+        let ref mut con = rdb.get_connection().unwrap();
+        let _: () = redis::cmd("FLUSHDB").query(con).unwrap();
 
-        let _: () = redis::cmd("FLUSHDB").query(rdb).unwrap();
-
-        let began = now();
-        let expected = "value1".to_owned();
-        let rdb_key = "client-test-key".to_owned();
+        // let began = now();
+        let expected = "value1";
+        let rdb_key = "client-test-key";
         let rc1 = rc.clone();
-        let expected1 = "value1";
-        let rdb_key1 = "client-test-key";
         spawn(move || {
-            let res = rc1.fetch(rdb_key1.to_string(), Duration::new(60, 0), move || {
-                gen_data_func(expected1.to_string(), 200)
+            let res = rc1.fetch(rdb_key.to_string(), Duration::new(60, 0), || {
+                gen_data_func("value1".to_string(), 200)
             });
             assert!(res.is_ok());
-            assert_eq!(expected1, res.unwrap());
+            assert_eq!(expected.to_string(), res.unwrap());
         });
 
         sleep(Duration::new(0, 20_000));
 
-        let res = rc.fetch(rdb_key1.to_string(), Duration::new(60, 0), move || {
-            gen_data_func(expected1.to_string(), 201)
+        let res = rc.fetch(rdb_key.to_string(), Duration::new(60, 0), || {
+            gen_data_func("value1".to_string(), 201)
         });
         assert!(res.is_ok());
-        assert_eq!(expected.clone(), res.unwrap());
+        assert_eq!(expected.to_string(), res.unwrap());
 
-        let res = rc.tag_as_deleted(rdb_key.clone());
+        let res = rc.tag_as_deleted(rdb_key.to_string());
         assert!(res.is_ok());
 
         let nv = "value2";
-        let res = rc.fetch(rdb_key.clone(), Duration::new(60, 0), move || {
-            gen_data_func(nv.to_string(), 200)
+        let res = rc.fetch(rdb_key.to_string(), Duration::new(60, 0), || {
+            gen_data_func("value2".to_string(), 200)
         });
         assert!(res.is_ok());
-        assert_eq!(expected.clone(), res.unwrap());
+        assert_eq!(expected.to_string(), res.unwrap());
 
         sleep(Duration::new(0, 300_000));
 
-        let res = rc.fetch(rdb_key.clone(), Duration::new(60, 0), || {
+        let res = rc.fetch(rdb_key.to_string(), Duration::new(60, 0), || {
             gen_data_func("ignored".to_owned(), 200)
         });
         assert!(res.is_ok());
-        assert_eq!(nv.clone(), res.unwrap());
+        assert_eq!(nv.to_string(), res.unwrap());
     }
 }

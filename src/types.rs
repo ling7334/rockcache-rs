@@ -69,10 +69,18 @@ impl Clone for Options {
     }
 }
 
+#[derive(Debug)]
+pub enum Errors {
+    NeedFetch,
+    NeedAsyncFetch,
+    RedisError(RedisError),
+}
+
+#[derive(Debug)]
 pub struct Pair {
-    pub idx: i32,
+    pub idx: usize,
     pub data: String,
-    pub err: RedisError,
+    pub err: Option<Errors>,
 }
 
 pub trait RocksCacheClient {
@@ -125,7 +133,11 @@ pub trait RocksCacheClient {
 }
 
 pub trait RocksCacheBatch {
-    fn _lua_get_batch<T>(&self, keys: Vec<String>, owner: String) -> RedisResult<Vec<T>>;
+    fn _lua_get_batch<T: FromRedisValue>(
+        &self,
+        keys: Vec<String>,
+        owner: String,
+    ) -> RedisResult<Vec<T>>;
     fn _lua_set_batch(
         &self,
         keys: Vec<String>,
@@ -136,30 +148,30 @@ pub trait RocksCacheBatch {
     fn _fetch_batch<F>(
         &self,
         keys: Vec<String>,
-        idxs: Vec<i32>,
+        idxs: Vec<usize>,
         expire: Duration,
         owner: String,
         func: F,
-    ) -> RedisResult<HashMap<i32, String>>
+    ) -> RedisResult<HashMap<usize, String>>
     where
-        F: Fn(Vec<i32>) -> RedisResult<HashMap<i32, String>>;
-    fn _keys_idx(&self, keys: Vec<String>) -> Vec<i32>;
+        F: Fn(Vec<usize>) -> RedisResult<HashMap<usize, String>>;
+    fn _keys_idx(&self, keys: Vec<String>) -> Vec<usize>;
     fn _weak_fetch_batch<F>(
         &self,
         keys: Vec<String>,
         expire: Duration,
         func: F,
-    ) -> RedisResult<HashMap<i32, String>>
+    ) -> RedisResult<HashMap<usize, String>>
     where
-        F: Fn(Vec<i32>) -> RedisResult<HashMap<i32, String>>;
+        F: 'static + Send + Clone + Fn(Vec<usize>) -> RedisResult<HashMap<usize, String>>;
     fn _strong_fetch_batch<F>(
         &self,
         keys: Vec<String>,
         expire: Duration,
         func: F,
-    ) -> RedisResult<HashMap<i32, String>>
+    ) -> RedisResult<HashMap<usize, String>>
     where
-        F: Fn(Vec<i32>) -> RedisResult<HashMap<i32, String>>;
+        F: Fn(Vec<usize>) -> RedisResult<HashMap<usize, String>>;
     /// fetch_batch returns a map with values indexed by index of keys list.
     /// 1. the first parameter is the keys list of the data
     /// 2. the second parameter is the data expiration time
@@ -175,9 +187,9 @@ pub trait RocksCacheBatch {
         keys: Vec<String>,
         expire: Duration,
         func: F,
-    ) -> RedisResult<HashMap<i32, String>>
+    ) -> RedisResult<HashMap<usize, String>>
     where
-        F: Fn(Vec<i32>) -> RedisResult<HashMap<i32, String>>;
+        F: 'static + Send + Clone + Fn(Vec<usize>) -> RedisResult<HashMap<usize, String>>;
     /// tag_as_deleted_batch a key list, the keys in list will expire after delay time.
     fn tag_as_deleted_batch(&self, keys: Vec<String>) -> RedisResult<()>;
 }

@@ -1,7 +1,6 @@
 use parking_lot::{Condvar, Mutex, RwLock, RwLockUpgradableReadGuard};
 use std::any::Any;
 use std::collections::HashMap;
-use std::fmt::Debug;
 use std::io::{Error, ErrorKind};
 use std::result::Result;
 use std::sync::Arc;
@@ -29,7 +28,7 @@ impl Group {
     pub fn do_work<T, E, F>(&self, key: &str, work: F) -> Result<T, Error>
     where
         T: Any + Clone + Send,
-        E: Debug,
+        E: std::error::Error + Send + Sync + 'static,
         F: FnOnce() -> Result<T, E>,
     {
         let map = self.m.upgradable_read();
@@ -65,13 +64,20 @@ impl Group {
 
         *call = Call {
             wg: true,
-            value: Box::new(work().expect("unable to retrive value")),
+            value: Box::new(match work() {
+                Ok(r) => r,
+                Err(e) => {
+                    return Err(Error::new(ErrorKind::Other, e));
+                }
+            }),
         };
         drop(call);
 
         cvar.notify_all();
         let mut wmap = self.m.write();
-        let &(_, ref target) = &*wmap.remove(key).unwrap();
+        let &(_, ref target) = &*wmap
+            .remove(key)
+            .ok_or(Error::new(ErrorKind::Other, "unable to remove entry"))?;
         drop(wmap);
         let result = target.lock();
         if let Some(s) = result.value.downcast_ref::<T>() {

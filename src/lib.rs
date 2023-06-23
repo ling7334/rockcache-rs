@@ -72,13 +72,12 @@ impl types::RocksCacheClient for Client {
         let pool = self.pool.clone();
         let ref mut con = from_r2d2_err(pool.get())?;
         if self.options.wait_replicas > 0 {
-            let _: () = call_lua(con, script, keys, args).expect("call_lua failed");
+            let _: () = call_lua(con, script, keys, args)?;
 
             let replicas: i32 = redis::cmd("WAIT")
                 .arg(self.options.wait_replicas)
                 .arg(self.options.wait_replicas_timeout.as_secs())
-                .query(con)
-                .expect("WAIT failed");
+                .query(con)?;
             if replicas < self.options.wait_replicas {
                 return Err(RedisError::from((
                     ErrorKind::TypeError,
@@ -104,18 +103,15 @@ impl types::RocksCacheClient for Client {
                     * self.options.random_expire_adjustment
                     * expire.as_secs_f64(),
             );
-        let v = self
-            .group
-            .do_work(key.clone().as_str(), || {
-                if self.options.disable_cache_read {
-                    func()
-                } else if self.options.strong_consistency {
-                    self._strong_fetch(key, ex, func)
-                } else {
-                    self._weak_fetch(key, ex, func)
-                }
-            })
-            .expect("failed to fetch data");
+        let v = self.group.do_work(key.clone().as_str(), || {
+            if self.options.disable_cache_read {
+                func()
+            } else if self.options.strong_consistency {
+                self._strong_fetch(key, ex, func)
+            } else {
+                self._weak_fetch(key, ex, func)
+            }
+        })?;
         Ok(v)
     }
 

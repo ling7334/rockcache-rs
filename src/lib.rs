@@ -819,7 +819,7 @@ impl types::RocksCacheBatch for Client {
             redis.call('EXPIRE', key, ARGV[1])
         end"#;
         let pool = self.pool.clone();
-        let ref mut con = pool.get()?;
+        let ref mut con = from_r2d2_err(pool.get())?;
         if self.options.wait_replicas > 0 {
             let _ = call_lua(con, script, keys, &[self.options.delay.as_secs()])?;
 

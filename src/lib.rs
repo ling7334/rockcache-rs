@@ -936,7 +936,7 @@ mod tests {
 
         // let began = now();
         let expected = "value1";
-        let rdb_key = "client-test-key";
+        let rdb_key = "client-test-key1";
         let rc1 = rc.clone();
         spawn(move || {
             let res = rc1.fetch(rdb_key.to_string(), Duration::new(60, 0), || {
@@ -983,7 +983,7 @@ mod tests {
         );
         let ref mut con = rdb.get_connection().unwrap();
         let _: () = redis::cmd("FLUSHDB").query(con).unwrap();
-        let rdb_key = "client-test-key";
+        let rdb_key = "client-test-key2";
         let res = rc.fetch(rdb_key.to_string(), Duration::new(60, 0), || {
             Err(RedisError::from((
                 redis::ErrorKind::TypeError,

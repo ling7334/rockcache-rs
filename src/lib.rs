@@ -2,7 +2,7 @@ use r2d2;
 use redis::{Client as RedisClient, Commands, ErrorKind, FromRedisValue, RedisError, RedisResult};
 use singleflight::Group;
 use std::collections::HashMap;
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::mpsc;
 use std::thread::sleep;
 use std::time::Duration;
 use std::usize::MAX;

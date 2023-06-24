@@ -5,7 +5,6 @@ use std::collections::HashMap;
 use std::sync::mpsc;
 use std::thread::sleep;
 use std::time::Duration;
-use std::usize::MAX;
 use threadpool::ThreadPool;
 use uuid::Uuid;
 
@@ -37,7 +36,7 @@ impl Clone for Client {
             pool: self.pool.clone(),
             options: self.options.clone(),
             group: self.group.clone(),
-            threads: ThreadPool::new(MAX),
+            threads: ThreadPool::new(16),
         }
     }
 }
@@ -67,7 +66,7 @@ impl types::RocksCacheClient for Client {
                 .unwrap(),
             options: options,
             group: Group::new(),
-            threads: ThreadPool::new(MAX),
+            threads: ThreadPool::new(16),
         }
     }
 
@@ -124,7 +123,11 @@ impl types::RocksCacheClient for Client {
             } else if self.options.strong_consistency {
                 self._strong_fetch(key, ex, func)
             } else {
-                self._weak_fetch(key, ex, func)
+                let wr = self._weak_fetch(key, ex, func);
+                if let Ok(r) = &wr {
+                    println!("weak fetch result: {r}");
+                }
+                wr
             }
         })?;
         Ok(v)
@@ -235,21 +238,26 @@ impl types::RocksCacheClient for Client {
     fn _lua_set(&self, key: String, value: String, expire: i32, owner: String) -> RedisResult<()> {
         let pool = self.pool.clone();
         let ref mut con = from_r2d2_err(pool.get())?;
-        call_lua(
+        let oldowner: String = con.hget(key.clone(), "lockOwner")?;
+        println!("old owner: {oldowner}, owner: {owner}");
+        let res: bool = call_lua(
             con,
             r#"-- luaSet
             local o = redis.call('HGET', KEYS[1], 'lockOwner')
             if o ~= ARGV[2] then
-                    return
+                    return false
             end
             redis.call('HSET', KEYS[1], 'value', ARGV[1])
             redis.call('HDEL', KEYS[1], 'lockUntil')
             redis.call('HDEL', KEYS[1], 'lockOwner')
             redis.call('EXPIRE', KEYS[1], ARGV[3])
+            return true
             "#,
             &[key],
-            &[value, owner, expire.to_string()],
-        )
+            &[value, owner.clone(), expire.to_string()],
+        )?;
+        println!("lua set {res}");
+        Ok(())
     }
 
     fn _fetch_new<F>(
@@ -275,7 +283,7 @@ impl types::RocksCacheClient for Client {
                         return con.del(key);
                     }
                 }
-                match self._lua_set(key.clone(), r.clone(), ex.as_secs() as i32, owner.clone()) {
+                match self._lua_set(key, r.clone(), ex.as_secs() as i32, owner) {
                     Err(e) => Err(e),
                     Ok(_) => Ok(r),
                 }
@@ -561,7 +569,7 @@ impl types::RocksCacheBatch for Client {
         if !to_get.is_empty() {
             // read from redis and sleep to wait
             let (tx, rx) = mpsc::channel::<Pair>();
-            let ths = ThreadPool::new(MAX);
+            let ths = ThreadPool::new(16);
             for idx in to_get {
                 let tx = tx.clone();
                 let keys = keys.clone();
@@ -714,7 +722,7 @@ impl types::RocksCacheBatch for Client {
         if !to_get.is_empty() {
             // read from redis and sleep to wait
             // let mut tasks: Vec<JoinHandle<Result<(), Error>>> = Vec::new();
-            let ths = ThreadPool::new(MAX);
+            let ths = ThreadPool::new(16);
             let (tx, rx) = mpsc::channel::<Pair>();
             for idx in to_get {
                 let keys = keys.clone();
@@ -899,7 +907,7 @@ mod tests {
         assert!(res.is_ok());
         assert_eq!(expected.to_string(), res.unwrap());
 
-        sleep(Duration::new(0, 300_000));
+        sleep(Duration::new(3, 0));
 
         let res = rc.fetch(rdb_key.to_string(), Duration::new(60, 0), || {
             gen_data_func("ignored".to_owned(), 200)

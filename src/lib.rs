@@ -1,7 +1,8 @@
 use r2d2;
 use redis::{Client as RedisClient, Commands, ErrorKind, FromRedisValue, RedisError, RedisResult};
 use singleflight::Group;
-use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread::sleep;
 use std::time::Duration;
 use std::usize::MAX;
@@ -484,14 +485,11 @@ impl types::RocksCacheBatch for Client {
         keys: Vec<String>,
         expire: Duration,
         func: F,
-    ) -> RedisResult<std::collections::HashMap<usize, String>>
+    ) -> RedisResult<HashMap<usize, String>>
     where
-        F: 'static
-            + Send
-            + Clone
-            + Fn(Vec<usize>) -> RedisResult<std::collections::HashMap<usize, String>>,
+        F: 'static + Send + Clone + Fn(Vec<usize>) -> RedisResult<HashMap<usize, String>>,
     {
-        let mut result: std::collections::HashMap<usize, String> = std::collections::HashMap::new();
+        let mut result: HashMap<usize, String> = HashMap::new();
         let owner = uuid::Uuid::new_v4().to_string();
 
         let mut to_get = Vec::new();
@@ -554,7 +552,7 @@ impl types::RocksCacheBatch for Client {
                 owner.clone(),
                 func.clone(),
             )?;
-            for k in 0..to_fetch.capacity() {
+            for k in 0..to_fetch.len() {
                 result.insert(k, fetched.get(&k).unwrap_or(&"".to_owned()).clone());
             }
             to_fetch.clear(); // reset to_fetch
@@ -562,10 +560,10 @@ impl types::RocksCacheBatch for Client {
 
         if !to_get.is_empty() {
             // read from redis and sleep to wait
-            let ch: Arc<Mutex<Vec<Pair>>> = Arc::new(Mutex::new(Vec::new()));
+            let (tx, rx) = mpsc::channel::<Pair>();
             let ths = ThreadPool::new(MAX);
             for idx in to_get {
-                let ch = Arc::clone(&ch);
+                let tx = tx.clone();
                 let keys = keys.clone();
                 let owner = owner.clone();
                 let self1 = self.clone();
@@ -573,8 +571,7 @@ impl types::RocksCacheBatch for Client {
                     match self1._lua_get::<LockableValue<String>>(keys[idx].clone(), owner.clone())
                     {
                         Ok(LockableValue::Nil(r)) => {
-                            let mut u = ch.lock().unwrap();
-                            u.push(Pair {
+                            let _ = tx.send(Pair {
                                 idx: idx,
                                 data: r.unwrap_or_default(),
                                 err: None,
@@ -583,8 +580,7 @@ impl types::RocksCacheBatch for Client {
                         }
                         Ok(LockableValue::Value(r)) => match r {
                             Some(_) => {
-                                let mut u = ch.lock().unwrap();
-                                u.push(Pair {
+                                let _ = tx.send(Pair {
                                     idx: idx,
                                     data: "".to_owned(),
                                     err: Some(types::Errors::NeedAsyncFetch),
@@ -592,8 +588,7 @@ impl types::RocksCacheBatch for Client {
                                 return;
                             }
                             None => {
-                                let mut u = ch.lock().unwrap();
-                                u.push(Pair {
+                                let _ = tx.send(Pair {
                                     idx: idx,
                                     data: "".to_owned(),
                                     err: Some(types::Errors::NeedFetch),
@@ -603,8 +598,7 @@ impl types::RocksCacheBatch for Client {
                         },
                         Ok(LockableValue::Locked(r)) => match r {
                             Some(r) => {
-                                let mut u = ch.lock().unwrap();
-                                u.push(Pair {
+                                let _ = tx.send(Pair {
                                     idx: idx,
                                     data: r,
                                     err: None,
@@ -617,8 +611,7 @@ impl types::RocksCacheBatch for Client {
                             }
                         },
                         Err(e) => {
-                            let mut u = ch.lock().unwrap();
-                            u.push(Pair {
+                            let _ = tx.send(Pair {
                                 idx: idx,
                                 data: "".to_owned(),
                                 err: Some(types::Errors::RedisError(e)),
@@ -629,8 +622,9 @@ impl types::RocksCacheBatch for Client {
                 });
             }
             ths.join();
-            let ch = Arc::try_unwrap(ch).unwrap().into_inner().unwrap();
-            for p in ch {
+            drop(tx);
+
+            while let Ok(p) = rx.recv() {
                 if let Some(err) = p.err {
                     match err {
                         types::Errors::NeedFetch => {
@@ -660,7 +654,7 @@ impl types::RocksCacheBatch for Client {
 
         if !to_fetch.is_empty() {
             // batch fetch
-            let size = to_fetch.capacity();
+            let size = to_fetch.len();
             let fetched = self._fetch_batch(keys, to_fetch, expire, owner, func)?;
             for k in 0..size {
                 result.insert(k, fetched.get(&k).unwrap().clone());
@@ -675,11 +669,123 @@ impl types::RocksCacheBatch for Client {
         keys: Vec<String>,
         expire: Duration,
         func: F,
-    ) -> RedisResult<std::collections::HashMap<usize, String>>
+    ) -> RedisResult<HashMap<usize, String>>
     where
-        F: Fn(Vec<usize>) -> RedisResult<std::collections::HashMap<usize, String>>,
+        F: Clone + Fn(Vec<usize>) -> RedisResult<HashMap<usize, String>>,
     {
-        todo!()
+        let mut result: HashMap<usize, String> = HashMap::new();
+        let owner: String = Uuid::new_v4().to_string();
+        let mut to_get: Vec<usize> = Vec::new();
+        let mut to_fetch: Vec<usize> = Vec::new();
+
+        // read from redis without sleep
+        let rs: Vec<LockableValue<String>> = self._lua_get_batch(keys.clone(), owner.clone())?;
+        for (i, r) in rs.into_iter().enumerate() {
+            match r {
+                LockableValue::Nil(s) => {
+                    // normal value
+                    result.insert(i, s.unwrap_or_default());
+                }
+                LockableValue::Value(_) => {
+                    // locked for fetch
+                    to_get.push(i);
+                }
+                LockableValue::Locked(_) => {
+                    // locked by other
+                    to_fetch.push(i);
+                }
+            }
+        }
+
+        if !to_fetch.is_empty() {
+            // batch fetch
+            let fetched = self._fetch_batch(
+                keys.clone(),
+                to_fetch.clone(),
+                expire,
+                owner.clone(),
+                func.clone(),
+            )?;
+            for k in 0..to_fetch.len() {
+                result.insert(k, fetched[&k].clone());
+            }
+        }
+
+        if !to_get.is_empty() {
+            // read from redis and sleep to wait
+            // let mut tasks: Vec<JoinHandle<Result<(), Error>>> = Vec::new();
+            let ths = ThreadPool::new(MAX);
+            let (tx, rx) = mpsc::channel::<Pair>();
+            for idx in to_get {
+                let keys = keys.clone();
+                let owner = owner.clone();
+                let tx = tx.clone();
+                let c = self.clone();
+                ths.execute(move || loop {
+                    match c._lua_get::<LockableValue<String>>(keys[idx].clone(), owner.clone()) {
+                        Ok(r) => match r {
+                            LockableValue::Nil(s) => {
+                                let _ = tx.send(Pair {
+                                    idx: idx,
+                                    data: s.unwrap_or_default(),
+                                    err: None,
+                                });
+                                return;
+                            }
+                            LockableValue::Value(_) => {
+                                let _ = tx.send(Pair {
+                                    idx: idx,
+                                    data: "".to_owned(),
+                                    err: Some(types::Errors::NeedFetch),
+                                });
+                                return;
+                            }
+                            LockableValue::Locked(_) => {
+                                sleep(c.options.lock_sleep);
+                                continue;
+                            }
+                        },
+                        Err(e) => {
+                            let _ = tx.send(Pair {
+                                idx: idx,
+                                data: "".to_owned(),
+                                err: Some(types::Errors::RedisError(e)),
+                            });
+                            return;
+                        }
+                    }
+                })
+            }
+
+            drop(tx);
+            while let Ok(p) = rx.recv() {
+                if let Some(err) = p.err {
+                    match err {
+                        types::Errors::NeedFetch => {
+                            to_fetch.push(p.idx);
+                            continue;
+                        }
+                        types::Errors::RedisError(e) => {
+                            return Err(e);
+                        }
+                        types::Errors::NeedAsyncFetch => {
+                            continue;
+                        }
+                    }
+                }
+                result.insert(p.idx, p.data);
+            }
+        }
+
+        if !to_fetch.is_empty() {
+            // batch fetch
+            let fetched = self._fetch_batch(keys.clone(), to_fetch.clone(), expire, owner, func)?;
+            for k in 0..to_fetch.len() {
+                result.insert(k, fetched[&k].clone());
+            }
+        }
+
+        Ok(result)
     }
 
     fn fetch_batch<F>(

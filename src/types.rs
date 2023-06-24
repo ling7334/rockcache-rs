@@ -171,7 +171,7 @@ pub trait RocksCacheBatch {
         func: F,
     ) -> RedisResult<HashMap<usize, String>>
     where
-        F: Fn(Vec<usize>) -> RedisResult<HashMap<usize, String>>;
+        F: Clone + Fn(Vec<usize>) -> RedisResult<HashMap<usize, String>>;
     /// fetch_batch returns a map with values indexed by index of keys list.
     /// 1. the first parameter is the keys list of the data
     /// 2. the second parameter is the data expiration time

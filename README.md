@@ -1,4 +1,5 @@
 ![license](https://img.shields.io/github/license/dtm-labs/rockscache)
+[![Cargo Build & Test](https://github.com/ling7334/rockscache-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/ling7334/rockscache-rs/actions/workflows/ci.yml)
 
 # RocksCache
 

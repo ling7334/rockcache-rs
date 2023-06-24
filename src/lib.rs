@@ -121,7 +121,11 @@ impl types::RocksCacheClient for Client {
             if self.options.disable_cache_read {
                 func()
             } else if self.options.strong_consistency {
-                self._strong_fetch(key, ex, func)
+                let sr = self._strong_fetch(key, ex, func);
+                if let Err(r) = &sr {
+                    println!("strong fetch result: {r}");
+                };
+                sr
             } else {
                 let wr = self._weak_fetch(key, ex, func);
                 if let Ok(r) = &wr {
@@ -137,6 +141,7 @@ impl types::RocksCacheClient for Client {
     where
         F: Fn() -> Result<String, RedisError>,
     {
+        println!("_strong_fetch");
         let owner = Uuid::new_v4().to_string();
 
         loop {
@@ -272,8 +277,8 @@ impl types::RocksCacheClient for Client {
     {
         match func() {
             Err(e) => {
-                let _ = self.unlock_for_update(key, owner);
-                Err(e)
+                let _ = self.unlock_for_update(key, owner)?;
+                return Err(e);
             }
             Ok(r) => {
                 if r.is_empty() {
@@ -284,8 +289,8 @@ impl types::RocksCacheClient for Client {
                     }
                 }
                 match self._lua_set(key, r.clone(), ex.as_secs() as i32, owner) {
-                    Err(e) => Err(e),
-                    Ok(_) => Ok(r),
+                    Err(e) => return Err(e),
+                    Ok(_) => return Ok(r),
                 }
             }
         }
@@ -863,8 +868,8 @@ mod tests {
     use super::types::RocksCacheClient;
     use super::Client;
     use super::Options;
-    use redis::Client as RedisClient;
     use redis::RedisResult;
+    use redis::{Client as RedisClient, RedisError};
 
     fn gen_data_func(value: String, sleep_milli: u32) -> RedisResult<String> {
         sleep(Duration::new(0, sleep_milli * 1000));
@@ -914,5 +919,81 @@ mod tests {
         });
         assert!(res.is_ok());
         assert_eq!(nv.to_string(), res.unwrap());
+    }
+
+    #[test]
+    fn test_strong_fetch() {
+        let rdb = RedisClient::open("redis://127.0.0.1:6379/").unwrap();
+        let rc = Client::new(
+            rdb.clone(),
+            Options {
+                strong_consistency: true,
+                ..Default::default()
+            },
+        );
+        let ref mut con = rdb.get_connection().unwrap();
+        let _: () = redis::cmd("FLUSHDB").query(con).unwrap();
+
+        // let began = now();
+        let expected = "value1";
+        let rdb_key = "client-test-key";
+        let rc1 = rc.clone();
+        spawn(move || {
+            let res = rc1.fetch(rdb_key.to_string(), Duration::new(60, 0), || {
+                gen_data_func("value1".to_string(), 200)
+            });
+            assert!(res.is_ok());
+            assert_eq!(expected.to_string(), res.unwrap());
+        });
+
+        sleep(Duration::new(0, 20_000));
+
+        let res = rc.fetch(rdb_key.to_string(), Duration::new(60, 0), || {
+            gen_data_func("value1".to_string(), 201)
+        });
+        assert!(res.is_ok());
+        assert_eq!(expected.to_string(), res.unwrap());
+
+        let res = rc.tag_as_deleted(rdb_key.to_string());
+        assert!(res.is_ok());
+
+        let nv = "value2";
+        let res = rc.fetch(rdb_key.to_string(), Duration::new(60, 0), || {
+            gen_data_func("value2".to_string(), 200)
+        });
+        assert!(res.is_ok());
+        assert_eq!(nv.to_string(), res.unwrap());
+
+        let res = rc.fetch(rdb_key.to_string(), Duration::new(60, 0), || {
+            gen_data_func("ignored".to_owned(), 200)
+        });
+        assert!(res.is_ok());
+        assert_eq!(nv.to_string(), res.unwrap());
+    }
+
+    #[test]
+    fn test_strong_error_fetch() {
+        let rdb = RedisClient::open("redis://127.0.0.1:6379/").unwrap();
+        let rc = Client::new(
+            rdb.clone(),
+            Options {
+                strong_consistency: true,
+                ..Default::default()
+            },
+        );
+        let ref mut con = rdb.get_connection().unwrap();
+        let _: () = redis::cmd("FLUSHDB").query(con).unwrap();
+        let rdb_key = "client-test-key";
+        let res = rc.fetch(rdb_key.to_string(), Duration::new(60, 0), || {
+            Err(RedisError::from((
+                redis::ErrorKind::TypeError,
+                "fetch error",
+            )))
+        });
+        assert!(res.is_err());
+        let res = rc.fetch(rdb_key.to_string(), Duration::new(60, 0), || {
+            Ok("".to_owned())
+        });
+        assert!(res.is_ok());
     }
 }

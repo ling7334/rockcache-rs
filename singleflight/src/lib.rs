@@ -33,12 +33,15 @@ impl Group {
     {
         let map = self.m.upgradable_read();
         if let Some(state) = map.get(key) {
+            println!("reading...");
             let entry = state.clone();
             drop(map);
             let &(ref cvar, ref lock) = &*entry;
             let mut call = lock.lock();
             while !call.wg {
+                println!("waiting...");
                 cvar.wait(&mut call);
+                println!("noticed");
             }
             if let Some(s) = call.value.downcast_ref::<T>() {
                 return Ok(s.clone());
@@ -61,18 +64,21 @@ impl Group {
 
         let &(ref cvar, ref lock) = &*entry;
         let mut call = lock.lock();
-
+        println!("working...");
         *call = Call {
             wg: true,
             value: Box::new(match work() {
                 Ok(r) => r,
                 Err(e) => {
+                    let mut wmap = self.m.write();
+                    let _ = wmap.remove(key);
+                    cvar.notify_all();
                     return Err(Error::new(ErrorKind::Other, e));
                 }
             }),
         };
         drop(call);
-
+        println!("work done");
         cvar.notify_all();
         let mut wmap = self.m.write();
         let &(_, ref target) = &*wmap

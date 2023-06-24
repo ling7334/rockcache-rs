@@ -554,7 +554,7 @@ impl types::RocksCacheBatch for Client {
                 owner.clone(),
                 func.clone(),
             )?;
-            for k in to_fetch.clone() {
+            for k in 0..to_fetch.capacity() {
                 result.insert(k, fetched.get(&k).unwrap_or(&"".to_owned()).clone());
             }
             to_fetch.clear(); // reset to_fetch
@@ -650,20 +650,19 @@ impl types::RocksCacheBatch for Client {
 
         if !to_fetch_async.is_empty() {
             let self1 = self.clone();
-            let to_fetch_async1 = to_fetch_async.clone();
             let key1 = keys.clone();
             let owner1 = owner.clone();
             let func1 = func.clone();
             self.threads.execute(move || {
-                let _ = self1._fetch_batch(key1, to_fetch_async1, expire, owner1, func1);
+                let _ = self1._fetch_batch(key1, to_fetch_async, expire, owner1, func1);
             });
         }
 
         if !to_fetch.is_empty() {
             // batch fetch
-            let to_fetch1 = to_fetch.clone();
-            let fetched = self._fetch_batch(keys, to_fetch1, expire, owner, func)?;
-            for k in to_fetch {
+            let size = to_fetch.capacity();
+            let fetched = self._fetch_batch(keys, to_fetch, expire, owner, func)?;
+            for k in 0..size {
                 result.insert(k, fetched.get(&k).unwrap().clone());
             }
         }

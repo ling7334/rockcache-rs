@@ -2,8 +2,26 @@
 name = "rockscache"
 version = "0.1.0"
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+authors = ["Flynn <ling7334@gmail.com>"]
+description = "Redis Cache Library To Ensure Eventual Consistency And Strong Consistency With DB"
+license = "BSD-3-Clause license"
+documentation = "https://github.com/ling7334/rockscache-rs"
+homepage = "https://github.com/ling7334/rockscache-rs"
+repository = "https://github.com/ling7334/rockscache-rs"
+readme = "README.md"
+keywords = ["cache", "redis", "consistency", "distributed"]
+categories = ["asynchronous", "concurrency", "caching"]
+exclude = [
+    "test/*",
+    "tests/*",
+    "benches/*",
+    ".github/*",
+    ".gitignore",
+    ".dockerignore",
+    ".pre-commit-config.yaml",
+    "CODE_OF_CONDUCT.md",
+    ".markdownlint.yaml"
+]
 
 
 [dependencies]

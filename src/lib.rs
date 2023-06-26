@@ -11,7 +11,7 @@ use uuid::Uuid;
 mod utils;
 use utils::{call_lua, now};
 mod types;
-use tracing::{instrument, span, trace, Level};
+use tracing::{error, instrument, span, trace, Level};
 pub use types::Options;
 use types::{LockableValue, RocksCacheClient};
 
@@ -318,10 +318,12 @@ impl types::RocksCacheClient for Client {
         let _enter = span.enter();
         match func() {
             Err(e) => {
+                error! {"func execute error {}", e};
                 let _ = self.unlock_for_update(key, owner)?;
                 return Err(e);
             }
             Ok(r) => {
+                trace! {"func execute result {}", r};
                 if r.is_empty() {
                     if self.options.empty_expire == Duration::ZERO {
                         let pool = self.pool.clone();
@@ -330,7 +332,10 @@ impl types::RocksCacheClient for Client {
                     }
                 }
                 match self._lua_set(key, r.clone(), ex.as_secs() as i32, owner) {
-                    Err(e) => return Err(e),
+                    Err(e) => {
+                        error! {"_lua_set error {}", e};
+                        return Err(e);
+                    }
                     Ok(_) => return Ok(r),
                 }
             }

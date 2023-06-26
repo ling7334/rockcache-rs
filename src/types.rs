@@ -1,6 +1,8 @@
 use redis::{from_redis_value, Client, ErrorKind, FromRedisValue, RedisError, RedisResult, Value};
 use std::{collections::HashMap, time::Duration};
+use tracing::trace;
 
+#[derive(Debug)]
 /// Options represents the options for rockscache client
 pub struct Options {
     /// Delay is the delay delete time for keys that are tag deleted. default is 10s
@@ -217,7 +219,7 @@ impl<T: FromRedisValue> FromRedisValue for LockableValue<T> {
                     match items[1] {
                         // lockUntil not set
                         Value::Nil => {
-                            println!("lockUntil: nil");
+                            trace!("lockUntil: nil");
                             Ok(LockableValue::Nil(from_redis_value::<Option<T>>(
                                 &items[0],
                             )?))
@@ -225,7 +227,7 @@ impl<T: FromRedisValue> FromRedisValue for LockableValue<T> {
                         _ => {
                             match from_redis_value::<u64>(&items[1]) {
                                 Ok(i) => {
-                                    println!("lockUntil: {i}");
+                                    trace!("lockUntil: {i}");
                                     //locked by other
                                     Ok(LockableValue::Locked(from_redis_value::<Option<T>>(
                                         &items[0],
@@ -235,7 +237,7 @@ impl<T: FromRedisValue> FromRedisValue for LockableValue<T> {
                                     // not integer lockUntil
                                     match from_redis_value::<String>(&items[1]) {
                                         Ok(s) => {
-                                            println!("lockUntil: {s}");
+                                            trace!("lockUntil: {s}");
                                             if s == "LOCKED" {
                                                 Ok(LockableValue::Value(from_redis_value::<
                                                     Option<T>,

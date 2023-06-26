@@ -11,11 +11,13 @@ use uuid::Uuid;
 mod utils;
 use utils::{call_lua, now};
 mod types;
+use tracing::{instrument, span, trace, Level};
 pub use types::Options;
 use types::{LockableValue, RocksCacheClient};
 
 use crate::types::Pair;
 
+#[derive(Debug)]
 /// Client delay client
 pub struct Client {
     pool: r2d2::Pool<RedisClient>,
@@ -70,6 +72,7 @@ impl types::RocksCacheClient for Client {
         }
     }
 
+    #[instrument]
     fn tag_as_deleted(&self, key: String) -> RedisResult<()> {
         if self.options.disable_cache_delete {
             return Ok(());
@@ -110,6 +113,13 @@ impl types::RocksCacheClient for Client {
     where
         F: 'static + Send + Fn() -> Result<String, RedisError>,
     {
+        let span = span!(
+            Level::TRACE,
+            "fetch",
+            key = key,
+            expire = expire.as_secs_f64()
+        );
+        let _enter = span.enter();
         let ex = expire
             - self.options.delay
             - Duration::from_secs_f64(
@@ -123,13 +133,13 @@ impl types::RocksCacheClient for Client {
             } else if self.options.strong_consistency {
                 let sr = self._strong_fetch(key, ex, func);
                 if let Err(r) = &sr {
-                    println!("strong fetch result: {r}");
+                    trace!("strong fetch result: {}", r);
                 };
                 sr
             } else {
                 let wr = self._weak_fetch(key, ex, func);
                 if let Ok(r) = &wr {
-                    println!("weak fetch result: {r}");
+                    trace!("weak fetch result: {}", r);
                 }
                 wr
             }
@@ -141,7 +151,13 @@ impl types::RocksCacheClient for Client {
     where
         F: Fn() -> Result<String, RedisError>,
     {
-        println!("_strong_fetch");
+        let span = span!(
+            Level::TRACE,
+            "_strong_fetch",
+            key = key,
+            expire = ex.as_secs_f64()
+        );
+        let _enter = span.enter();
         let owner = Uuid::new_v4().to_string();
 
         loop {
@@ -164,43 +180,50 @@ impl types::RocksCacheClient for Client {
     where
         F: 'static + Send + Fn() -> Result<String, RedisError>,
     {
+        let span = span!(
+            Level::TRACE,
+            "_weak_fetch",
+            key = key,
+            expire = ex.as_secs_f64()
+        );
+        let _enter = span.enter();
         let owner = Uuid::new_v4().to_string();
 
         loop {
             match self._lua_get::<LockableValue<String>>(key.clone(), owner.clone()) {
                 Ok(LockableValue::Nil(r)) => match r {
                     Some(v) => {
-                        println!("LockableValue::Nil: {v}");
+                        trace!("LockableValue::Nil: {}", v);
                         return Ok(v);
                     }
                     None => {
-                        println!("LockableValue::Nil: None sleep");
+                        trace!("LockableValue::Nil: None sleep");
                         sleep(self.options.lock_sleep);
                         continue;
                     }
                 },
                 Ok(LockableValue::Value(r)) => match r {
                     Some(v) => {
-                        println!("LockableValue::Value: {v} _fetch_new return old");
+                        trace!("LockableValue::Value: {} _fetch_new return old", v);
                         let self1 = self.clone();
                         self.threads.execute(move || {
                             let _ = self1._fetch_new(key, ex, owner, func);
-                            println!("async fetch new complete");
+                            trace!("async fetch new complete");
                         });
                         return Ok(v);
                     }
                     None => {
-                        println!("LockableValue::Value: None _fetch_new");
+                        trace!("LockableValue::Value: None _fetch_new");
                         return self._fetch_new(key, ex, owner, func);
                     }
                 },
                 Ok(LockableValue::Locked(r)) => match r {
                     Some(v) => {
-                        println!("LockableValue::Locked: {v} return");
+                        trace!("LockableValue::Locked: {} return", v);
                         return Ok(v);
                     }
                     None => {
-                        println!("LockableValue::Locked: None sleep");
+                        trace!("LockableValue::Locked: None sleep");
                         sleep(self.options.lock_sleep);
                         continue;
                     }
@@ -216,6 +239,8 @@ impl types::RocksCacheClient for Client {
     where
         T: FromRedisValue,
     {
+        let span = span!(Level::TRACE, "_lua_get", key = key, owner = owner);
+        let _enter = span.enter();
         // let ref mut con = self.rdb.get_connection()?;
         let pool = self.pool.clone();
         let ref mut con = from_r2d2_err(pool.get())?;
@@ -241,10 +266,18 @@ impl types::RocksCacheClient for Client {
     }
 
     fn _lua_set(&self, key: String, value: String, expire: i32, owner: String) -> RedisResult<()> {
+        let span = span!(
+            Level::TRACE,
+            "_lua_set",
+            key = key,
+            owner = owner,
+            expire = expire
+        );
+        let _enter = span.enter();
         let pool = self.pool.clone();
         let ref mut con = from_r2d2_err(pool.get())?;
         let oldowner: String = con.hget(key.clone(), "lockOwner")?;
-        println!("old owner: {oldowner}, owner: {owner}");
+        trace!("old owner: {}, owner: {}", oldowner, owner);
         let res: bool = call_lua(
             con,
             r#"-- luaSet
@@ -261,7 +294,7 @@ impl types::RocksCacheClient for Client {
             &[key],
             &[value, owner.clone(), expire.to_string()],
         )?;
-        println!("lua set {res}");
+        trace!("lua set {}", res);
         Ok(())
     }
 
@@ -275,6 +308,14 @@ impl types::RocksCacheClient for Client {
     where
         F: Fn() -> Result<String, RedisError>,
     {
+        let span = span!(
+            Level::TRACE,
+            "_fetch_new",
+            key = key,
+            owner = owner,
+            expire = ex.as_secs_f64()
+        );
+        let _enter = span.enter();
         match func() {
             Err(e) => {
                 let _ = self.unlock_for_update(key, owner)?;
@@ -296,12 +337,14 @@ impl types::RocksCacheClient for Client {
         }
     }
 
+    #[instrument]
     fn raw_get(&self, key: String) -> RedisResult<String> {
         let pool = self.pool.clone();
         let ref mut con = from_r2d2_err(pool.get())?;
         con.hget(key, "value")
     }
 
+    #[instrument]
     fn raw_set(&self, key: String, value: String, expire: Duration) -> RedisResult<()> {
         let pool = self.pool.clone();
         let ref mut con = from_r2d2_err(pool.get())?;
@@ -311,6 +354,7 @@ impl types::RocksCacheClient for Client {
         }
     }
 
+    #[instrument]
     fn lock_for_update(&self, key: String, owner: String) -> RedisResult<()> {
         let pool = self.pool.clone();
         let ref mut con = from_r2d2_err(pool.get())?;
@@ -344,6 +388,7 @@ impl types::RocksCacheClient for Client {
         }
     }
 
+    #[instrument]
     fn unlock_for_update(&self, key: String, owner: String) -> RedisResult<()> {
         let pool = self.pool.clone();
         let ref mut con = from_r2d2_err(pool.get())?;
@@ -363,6 +408,7 @@ impl types::RocksCacheClient for Client {
 }
 
 impl types::RocksCacheBatch for Client {
+    #[instrument]
     fn _lua_get_batch<T: FromRedisValue>(
         &self,
         keys: Vec<String>,
@@ -397,6 +443,7 @@ impl types::RocksCacheBatch for Client {
         )
     }
 
+    #[instrument]
     fn _lua_set_batch(
         &self,
         keys: Vec<String>,
@@ -444,6 +491,14 @@ impl types::RocksCacheBatch for Client {
     where
         F: Fn(Vec<usize>) -> RedisResult<std::collections::HashMap<usize, String>>,
     {
+        let span = span!(
+            Level::TRACE,
+            "_fetch_batch",
+            keys = keys.join(","),
+            expire = expire.as_secs_f64(),
+            owner = owner
+        );
+        let _enter = span.enter();
         let mut data = match func(idxs.clone()) {
             Ok(r) => r,
             Err(e) => {
@@ -489,6 +544,7 @@ impl types::RocksCacheBatch for Client {
         Ok(data)
     }
 
+    #[instrument]
     fn _keys_idx(&self, keys: Vec<String>) -> Vec<usize> {
         keys.iter().enumerate().map(|(idx, _)| idx).collect()
     }
@@ -502,6 +558,13 @@ impl types::RocksCacheBatch for Client {
     where
         F: 'static + Send + Clone + Fn(Vec<usize>) -> RedisResult<HashMap<usize, String>>,
     {
+        let span = span!(
+            Level::TRACE,
+            "_weak_fetch_batch",
+            keys = keys.join(","),
+            expire = expire.as_secs_f64(),
+        );
+        let _enter = span.enter();
         let mut result: HashMap<usize, String> = HashMap::new();
         let owner = uuid::Uuid::new_v4().to_string();
 
@@ -686,6 +749,13 @@ impl types::RocksCacheBatch for Client {
     where
         F: Clone + Fn(Vec<usize>) -> RedisResult<HashMap<usize, String>>,
     {
+        let span = span!(
+            Level::TRACE,
+            "_strong_fetch_batch",
+            keys = keys.join(","),
+            expire = expire.as_secs_f64(),
+        );
+        let _enter = span.enter();
         let mut result: HashMap<usize, String> = HashMap::new();
         let owner: String = Uuid::new_v4().to_string();
         let mut to_get: Vec<usize> = Vec::new();
@@ -813,6 +883,13 @@ impl types::RocksCacheBatch for Client {
             + Clone
             + Fn(Vec<usize>) -> RedisResult<std::collections::HashMap<usize, String>>,
     {
+        let span = span!(
+            Level::TRACE,
+            "fetch_batch",
+            keys = keys.join(","),
+            expire = expire.as_secs_f64(),
+        );
+        let _enter = span.enter();
         if self.options.disable_cache_read {
             return func(self._keys_idx(keys));
         } else if self.options.strong_consistency {
@@ -863,26 +940,26 @@ mod tests {
     use std::thread::{sleep, spawn};
     use std::time::Duration;
 
-    // use crate::utils::now;
-
     use super::types::RocksCacheClient;
     use super::Client;
     use super::Options;
     use redis::RedisResult;
     use redis::{Client as RedisClient, RedisError};
+    use tracing;
+    use tracing_test::traced_test;
 
     fn gen_data_func(value: String, sleep_milli: u32) -> RedisResult<String> {
         sleep(Duration::new(0, sleep_milli * 1000));
         Ok(value)
     }
     #[test]
+    #[traced_test]
     fn test_weak_fetch() {
         let rdb = RedisClient::open("redis://127.0.0.1:6379/").unwrap();
         let rc = Client::new(rdb.clone(), Options::default());
         let ref mut con = rdb.get_connection().unwrap();
         let _: () = redis::cmd("FLUSHDB").query(con).unwrap();
 
-        // let began = now();
         let expected = "value1";
         let rdb_key = "client-test-key";
         let rc1 = rc.clone();
@@ -922,6 +999,7 @@ mod tests {
     }
 
     #[test]
+    #[traced_test]
     fn test_strong_fetch() {
         let rdb = RedisClient::open("redis://127.0.0.1:6379/").unwrap();
         let rc = Client::new(
@@ -972,6 +1050,7 @@ mod tests {
     }
 
     #[test]
+    #[traced_test]
     fn test_strong_error_fetch() {
         let rdb = RedisClient::open("redis://127.0.0.1:6379/").unwrap();
         let rc = Client::new(

@@ -9,3 +9,4 @@ publish = false
 
 [dependencies]
 parking_lot = "0.12"
+tracing = { version="0.1", features=["log"] }

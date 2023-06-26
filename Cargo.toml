@@ -30,12 +30,16 @@ r2d2 = { version = "0.8", optional=true}
 rand = "0.8"
 redis = {version="0.23", features=["r2d2"]}
 threadpool = { version = "1.8", optional=true }
+tracing = { version = "0.1", features=["log"]}
 tokio = {version = "1", default-features = false, features = ["rt"], optional=true}
 uuid = { version = "1", features=["v4"] }
 
 singleflight = {path="singleflight"}
 
+[dev-dependencies]
+tracing-test = "0.2"
+
 [features]
-async = ["tokio", "bb8-redis"]
-thread = ["dep:threadpool", "r2d2"]
+async = ["dep:tokio", "dep:bb8-redis"]
+thread = ["dep:threadpool", "dep:r2d2"]
 default = ["thread"]

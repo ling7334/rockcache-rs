@@ -4,17 +4,20 @@ use std::collections::HashMap;
 use std::io::{Error, ErrorKind};
 use std::result::Result;
 use std::sync::Arc;
+use tracing::{span, trace, Level};
 
+#[derive(Debug)]
 pub enum Status {
     Starting,
     LeaderDrop,
     Done,
 }
-
+#[derive(Debug)]
 struct Call {
     wg: Status,
     value: Box<dyn Any + Send>,
 }
+#[derive(Debug)]
 pub struct Group {
     m: Arc<RwLock<HashMap<String, Arc<(Condvar, Mutex<Call>)>>>>,
 }
@@ -37,9 +40,13 @@ impl Group {
         E: std::error::Error + Send + Sync + 'static,
         F: FnOnce() -> Result<T, E>,
     {
+        let span = span!(Level::TRACE, "do_work", key = key);
+        let _enter = span.enter();
         let map = self.m.upgradable_read();
+
+        trace!("Aquire read lock");
         if let Some(state) = map.get(key) {
-            println!("reading...");
+            trace!("Reading...");
             let entry = state.clone();
             // drop(map);
             let &(ref cvar, ref lock) = &*entry;
@@ -47,17 +54,20 @@ impl Group {
             loop {
                 match call.wg {
                     Status::Starting => {
-                        println!("waiting...");
+                        trace!("Not return, waiting...");
                         cvar.wait(&mut call);
-                        println!("noticed");
+                        trace!("Work done noticed");
                     }
                     Status::LeaderDrop => {
+                        trace!("Leader dropped");
                         break;
                     }
                     Status::Done => {
                         if let Some(s) = call.value.downcast_ref::<T>() {
+                            trace!("Value returned");
                             return Ok(s.clone());
                         } else {
+                            trace!("Error occur");
                             return Err(Error::new(ErrorKind::NotFound, "value not found"));
                         }
                     }
@@ -65,6 +75,7 @@ impl Group {
             }
         }
         let mut wmap = RwLockUpgradableReadGuard::upgrade(map);
+        trace!("lock upgrade");
         let state = wmap.entry(key.to_owned()).or_insert_with(|| {
             Arc::new((
                 Condvar::new(),
@@ -74,36 +85,42 @@ impl Group {
                 }),
             ))
         });
+        trace!("entry inited");
         let entry = state.clone();
         drop(wmap);
 
         let &(ref cvar, ref lock) = &*entry;
         let mut call = lock.lock();
-        println!("working...");
+
+        trace!("working...");
         match work() {
             Ok(r) => {
                 *call = Call {
                     wg: Status::Done,
                     value: Box::new(r),
-                }
+                };
             }
             Err(e) => {
                 *call = Call {
                     wg: Status::LeaderDrop,
                     value: Box::new(None::<T>),
                 };
-
+                cvar.notify_all();
+                trace!("Error occur");
                 return Err(Error::new(ErrorKind::Other, e));
             }
-        }
+        };
         drop(call);
-        println!("work done");
+
+        trace!("Work done");
         cvar.notify_all();
         let mut wmap = self.m.write();
         let &(_, ref target) = &*wmap
             .remove(key)
             .ok_or(Error::new(ErrorKind::Other, "unable to remove entry"))?;
         drop(wmap);
+
+        trace!("Entry removed");
         let result = target.lock();
         if let Some(s) = result.value.downcast_ref::<T>() {
             return Ok(s.clone());

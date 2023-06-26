@@ -1,6 +1,6 @@
 use redis::{from_redis_value, Client, ErrorKind, FromRedisValue, RedisError, RedisResult, Value};
 use std::{collections::HashMap, time::Duration};
-use tracing::{error, trace};
+use tracing::trace;
 
 #[derive(Debug)]
 /// Options represents the options for rockscache client

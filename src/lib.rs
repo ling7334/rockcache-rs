@@ -324,14 +324,16 @@ impl types::RocksCacheClient for Client {
             }
             Ok(r) => {
                 trace! {"func execute result {}", r};
+                let mut expire = ex;
                 if r.is_empty() {
                     if self.options.empty_expire == Duration::ZERO {
                         let pool = self.pool.clone();
                         let ref mut con = from_r2d2_err(pool.get())?;
                         return con.del(key);
                     }
+                    expire = self.options.empty_expire;
                 }
-                match self._lua_set(key, r.clone(), ex.as_secs() as i32, owner) {
+                match self._lua_set(key, r.clone(), expire.as_secs() as i32, owner) {
                     Err(e) => {
                         error! {"_lua_set error {}", e};
                         return Err(e);
@@ -1011,7 +1013,7 @@ mod tests {
             rdb.clone(),
             Options {
                 strong_consistency: true,
-                ..Default::default()
+                ..Options::default()
             },
         );
         let ref mut con = rdb.get_connection().unwrap();

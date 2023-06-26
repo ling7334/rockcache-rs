@@ -276,8 +276,6 @@ impl types::RocksCacheClient for Client {
         let _enter = span.enter();
         let pool = self.pool.clone();
         let ref mut con = from_r2d2_err(pool.get())?;
-        let oldowner: String = con.hget(key.clone(), "lockOwner")?;
-        trace!("old owner: {}, owner: {}", oldowner, owner);
         let res: bool = call_lua(
             con,
             r#"-- luaSet

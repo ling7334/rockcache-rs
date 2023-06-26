@@ -1,6 +1,6 @@
 use redis::{from_redis_value, Client, ErrorKind, FromRedisValue, RedisError, RedisResult, Value};
 use std::{collections::HashMap, time::Duration};
-use tracing::trace;
+use tracing::{error, trace};
 
 #[derive(Debug)]
 /// Options represents the options for rockscache client
@@ -207,6 +207,7 @@ pub enum LockableValue<T> {
 
 impl<T: FromRedisValue> FromRedisValue for LockableValue<T> {
     fn from_redis_value(v: &Value) -> RedisResult<LockableValue<T>> {
+        trace!("value is {:?}", v);
         match *v {
             Value::Bulk(ref items) => {
                 if items.len() != 2 {

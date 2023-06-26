@@ -5,8 +5,14 @@ use std::io::{Error, ErrorKind};
 use std::result::Result;
 use std::sync::Arc;
 
+pub enum Status {
+    Starting,
+    LeaderDrop,
+    Done,
+}
+
 struct Call {
-    wg: bool,
+    wg: Status,
     value: Box<dyn Any + Send>,
 }
 pub struct Group {
@@ -35,18 +41,27 @@ impl Group {
         if let Some(state) = map.get(key) {
             println!("reading...");
             let entry = state.clone();
-            drop(map);
+            // drop(map);
             let &(ref cvar, ref lock) = &*entry;
             let mut call = lock.lock();
-            while !call.wg {
-                println!("waiting...");
-                cvar.wait(&mut call);
-                println!("noticed");
-            }
-            if let Some(s) = call.value.downcast_ref::<T>() {
-                return Ok(s.clone());
-            } else {
-                return Err(Error::new(ErrorKind::NotFound, "value not found"));
+            loop {
+                match call.wg {
+                    Status::Starting => {
+                        println!("waiting...");
+                        cvar.wait(&mut call);
+                        println!("noticed");
+                    }
+                    Status::LeaderDrop => {
+                        break;
+                    }
+                    Status::Done => {
+                        if let Some(s) = call.value.downcast_ref::<T>() {
+                            return Ok(s.clone());
+                        } else {
+                            return Err(Error::new(ErrorKind::NotFound, "value not found"));
+                        }
+                    }
+                }
             }
         }
         let mut wmap = RwLockUpgradableReadGuard::upgrade(map);
@@ -54,7 +69,7 @@ impl Group {
             Arc::new((
                 Condvar::new(),
                 Mutex::new(Call {
-                    wg: false,
+                    wg: Status::Starting,
                     value: Box::new(None::<T>),
                 }),
             ))
@@ -65,18 +80,22 @@ impl Group {
         let &(ref cvar, ref lock) = &*entry;
         let mut call = lock.lock();
         println!("working...");
-        *call = Call {
-            wg: true,
-            value: Box::new(match work() {
-                Ok(r) => r,
-                Err(e) => {
-                    let mut wmap = self.m.write();
-                    let _ = wmap.remove(key);
-                    cvar.notify_all();
-                    return Err(Error::new(ErrorKind::Other, e));
+        match work() {
+            Ok(r) => {
+                *call = Call {
+                    wg: Status::Done,
+                    value: Box::new(r),
                 }
-            }),
-        };
+            }
+            Err(e) => {
+                *call = Call {
+                    wg: Status::LeaderDrop,
+                    value: Box::new(None::<T>),
+                };
+
+                return Err(Error::new(ErrorKind::Other, e));
+            }
+        }
         drop(call);
         println!("work done");
         cvar.notify_all();

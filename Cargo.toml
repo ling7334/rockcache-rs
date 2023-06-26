@@ -25,11 +25,17 @@ exclude = [
 
 
 [dependencies]
-r2d2 = "0.8"
+bb8-redis = {version="0.13", optional=true}
+r2d2 = { version = "0.8", optional=true}
 rand = "0.8"
 redis = {version="0.23", features=["r2d2"]}
-threadpool = "1.8"
-# tokio = {version = "1", default-features = false, features = ["rt"]}
+threadpool = { version = "1.8", optional=true }
+tokio = {version = "1", default-features = false, features = ["rt"], optional=true}
 uuid = { version = "1", features=["v4"] }
 
 singleflight = {path="singleflight"}
+
+[features]
+async = ["tokio", "bb8-redis"]
+thread = ["dep:threadpool", "r2d2"]
+default = ["thread"]

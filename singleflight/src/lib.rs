@@ -42,54 +42,97 @@ impl Group {
     {
         let span = span!(Level::TRACE, "do_work", key = key);
         let _enter = span.enter();
-        let map = self.m.upgradable_read();
+        let mut map = self.m.upgradable_read();
 
         trace!("Aquire read lock");
-        if let Some(state) = map.get(key) {
-            trace!("Reading...");
-            let entry = state.clone();
-            // drop(map);
-            let &(ref cvar, ref lock) = &*entry;
-            let mut call = lock.lock();
-            loop {
-                match call.wg {
-                    Status::Starting => {
-                        trace!("Not return, waiting...");
-                        cvar.wait(&mut call);
-                        trace!("Work done noticed");
-                    }
-                    Status::LeaderDrop => {
-                        trace!("Leader dropped");
-                        break;
-                    }
-                    Status::Done => {
-                        if let Some(s) = call.value.downcast_ref::<T>() {
-                            trace!("Value returned");
-                            return Ok(s.clone());
-                        } else {
-                            trace!("Error occur");
-                            return Err(Error::new(ErrorKind::NotFound, "value not found"));
+        match map.get(key) {
+            Some(state) => {
+                trace!("Reading...");
+                let &(ref cvar, ref lock) = &*state.clone();
+                let mut call = lock.lock();
+                loop {
+                    match call.wg {
+                        Status::Starting => {
+                            trace!("Not return, waiting...");
+                            cvar.wait(&mut call);
+                            trace!("Work done noticed");
+                            continue;
+                        }
+                        Status::LeaderDrop => {
+                            trace!("Leader dropped");
+                            let mut wmap = match RwLockUpgradableReadGuard::try_upgrade(map) {
+                                Ok(r) => r,
+                                Err(_) => {
+                                    map = self.m.upgradable_read();
+                                    continue;
+                                }
+                            };
+                            wmap.entry(key.to_owned()).or_insert_with(|| {
+                                Arc::new((
+                                    Condvar::new(),
+                                    Mutex::new(Call {
+                                        wg: Status::Starting,
+                                        value: Box::new(None::<T>),
+                                    }),
+                                ))
+                            });
+                            drop(wmap);
+                            break;
+                            // match map.try_with_upgraded(|wmap| {
+                            //     trace!("Lock upgraded");
+                            //     wmap.entry(key.to_owned()).or_insert_with(|| {
+                            //         Arc::new((
+                            //             Condvar::new(),
+                            //             Mutex::new(Call {
+                            //                 wg: Status::Starting,
+                            //                 value: Box::new(None::<T>),
+                            //             }),
+                            //         ))
+                            //     });
+                            //     trace!("entry inited");
+                            //     Some(())
+                            // }) {
+                            //     Some(_) => break,
+                            //     None => {
+                            //         trace!("Lock not aquired, try again...");
+                            //         continue;
+                            //     }
+                            // }
+                        }
+                        Status::Done => {
+                            if let Some(s) = call.value.downcast_ref::<T>() {
+                                trace!("Value returned");
+                                return Ok(s.clone());
+                            } else {
+                                trace!("Error occur");
+                                return Err(Error::new(ErrorKind::NotFound, "value not found"));
+                            }
                         }
                     }
                 }
             }
+            None => {
+                let mut wmap = RwLockUpgradableReadGuard::upgrade(map);
+                wmap.entry(key.to_owned()).or_insert_with(|| {
+                    Arc::new((
+                        Condvar::new(),
+                        Mutex::new(Call {
+                            wg: Status::Starting,
+                            value: Box::new(None::<T>),
+                        }),
+                    ))
+                });
+                drop(wmap);
+            }
         }
-        let mut wmap = RwLockUpgradableReadGuard::upgrade(map);
-        trace!("lock upgrade");
-        let state = wmap.entry(key.to_owned()).or_insert_with(|| {
-            Arc::new((
-                Condvar::new(),
-                Mutex::new(Call {
-                    wg: Status::Starting,
-                    value: Box::new(None::<T>),
-                }),
-            ))
-        });
-        trace!("entry inited");
-        let entry = state.clone();
-        drop(wmap);
+        let map = self.m.read();
+        let entry = match map.get(key) {
+            Some(r) => r,
+            None => unreachable!(),
+        };
+        let &(ref cvar, ref lock) = &*entry.clone();
+        drop(map);
 
-        let &(ref cvar, ref lock) = &*entry;
         let mut call = lock.lock();
 
         trace!("working...");
@@ -106,7 +149,7 @@ impl Group {
                     value: Box::new(None::<T>),
                 };
                 cvar.notify_all();
-                trace!("Error occur");
+                trace!("Error occur during work");
                 return Err(Error::new(ErrorKind::Other, e));
             }
         };
@@ -127,5 +170,37 @@ impl Group {
         } else {
             return Err(Error::new(ErrorKind::NotFound, "value not found"));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tracing;
+    use tracing_test::traced_test;
+
+    use super::Group;
+    use std::io::Error as IOErr;
+    use std::io::ErrorKind;
+
+    #[test]
+    #[traced_test]
+    fn test_do_work() {
+        let group = Group::new();
+        let res = group.do_work::<i32, IOErr, _>("test_key", || Ok(0));
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), 0);
+    }
+
+    #[test]
+    #[traced_test]
+    fn test_do_work_error() {
+        let group = Group::new();
+        let res = group.do_work::<(), IOErr, _>("test_key", || {
+            Err(IOErr::new(ErrorKind::InvalidData, "test error"))
+        });
+        assert!(res.is_err());
+        let res = group.do_work::<i32, IOErr, _>("test_key", || Ok(0));
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), 0);
     }
 }

@@ -994,7 +994,7 @@ mod tests {
         assert!(res.is_ok());
         assert_eq!(expected.to_string(), res.unwrap());
 
-        sleep(Duration::new(3, 0));
+        sleep(Duration::new(1, 0));
 
         let res = rc.fetch(rdb_key.to_string(), Duration::new(60, 0), || {
             gen_data_func("ignored".to_owned(), 200)
@@ -1062,7 +1062,7 @@ mod tests {
             rdb.clone(),
             Options {
                 strong_consistency: true,
-                ..Default::default()
+                ..Options::default()
             },
         );
         let ref mut con = rdb.get_connection().unwrap();

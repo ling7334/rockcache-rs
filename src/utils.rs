@@ -1,3 +1,5 @@
+#[cfg(feature = "async")]
+use redis::aio::ConnectionLike as AConnectionLike;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use redis::{ConnectionLike, FromRedisValue, RedisError, ToRedisArgs};
@@ -13,6 +15,26 @@ where
     T: FromRedisValue,
 {
     redis::Script::new(script).key(keys).arg(args).invoke(conn)
+}
+
+#[cfg(feature = "async")]
+pub async fn call_lua_async<C, R, S, T>(
+    conn: &mut C,
+    script: &str,
+    keys: R,
+    args: S,
+) -> Result<T, RedisError>
+where
+    C: AConnectionLike,
+    R: ToRedisArgs,
+    S: ToRedisArgs,
+    T: FromRedisValue,
+{
+    redis::Script::new(script)
+        .key(keys)
+        .arg(args)
+        .invoke_async(conn)
+        .await
 }
 
 pub fn now() -> u64 {

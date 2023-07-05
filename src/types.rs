@@ -1,8 +1,8 @@
-use redis::{from_redis_value, Client, ErrorKind, FromRedisValue, RedisError, RedisResult, Value};
-use std::{collections::HashMap, time::Duration};
+use redis::{from_redis_value, ErrorKind, FromRedisValue, RedisError, RedisResult, Value};
+use std::time::Duration;
 use tracing::trace;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 /// Options represents the options for rockscache client
 pub struct Options {
     /// Delay is the delay delete time for keys that are tag deleted. default is 10s
@@ -53,148 +53,162 @@ impl Default for Options {
         }
     }
 }
-
-impl Clone for Options {
-    fn clone(&self) -> Self {
-        Self {
-            delay: self.delay.clone(),
-            empty_expire: self.empty_expire.clone(),
-            lock_expire: self.lock_expire.clone(),
-            lock_sleep: self.lock_sleep.clone(),
-            wait_replicas: self.wait_replicas.clone(),
-            wait_replicas_timeout: self.wait_replicas_timeout.clone(),
-            random_expire_adjustment: self.random_expire_adjustment.clone(),
-            disable_cache_read: self.disable_cache_read.clone(),
-            disable_cache_delete: self.disable_cache_delete.clone(),
-            strong_consistency: self.strong_consistency.clone(),
-        }
-    }
-}
-
 #[derive(Debug)]
 pub enum Errors {
     NeedFetch,
     NeedAsyncFetch,
-    RedisError(RedisError),
+    Custom(anyhow::Error),
 }
-
 #[derive(Debug)]
-pub struct Pair {
+pub struct Pair<T> {
     pub idx: usize,
-    pub data: String,
+    pub data: Option<T>,
     pub err: Option<Errors>,
 }
 
-pub trait RocksCacheClient {
-    /// new return a new rockscache client
-    /// for each key, rockscache client store a hash set,
-    /// the hash set contains the following fields:
-    ///
-    /// value: the value of the key
-    ///
-    /// lockUntil: the time when the lock is released.
-    ///
-    /// lockOwner: the owner of the lock.
-    ///
-    /// if a thread query the cache for data, and no cache exists, it will lock the key before querying data in DB
-    fn new(rdb: Client, options: Options) -> Self;
-    /// tag_as_deleted a key, the key will expire after delay time.
-    fn tag_as_deleted(&self, key: String) -> RedisResult<()>;
-    /// fetch returns the value store in cache indexed by the key.
-    /// If the key doest not exists, call fn to get result, store it in cache, then return.
-    fn fetch<F>(&self, key: String, expire: Duration, func: F) -> RedisResult<String>
-    where
-        F: 'static + Send + Fn() -> Result<String, RedisError>;
-    fn _strong_fetch<F>(&self, key: String, ex: Duration, func: F) -> RedisResult<String>
-    where
-        F: Fn() -> Result<String, RedisError>;
-    fn _weak_fetch<F>(&self, key: String, ex: Duration, func: F) -> RedisResult<String>
-    where
-        F: 'static + Send + Fn() -> Result<String, RedisError>;
-    fn _lua_get<T>(&self, key: String, owner: String) -> RedisResult<T>
-    where
-        T: FromRedisValue;
-    fn _lua_set(&self, key: String, value: String, expire: i32, owner: String) -> RedisResult<()>;
-    fn _fetch_new<F>(
-        &self,
-        key: String,
-        ex: Duration,
-        owner: String,
-        func: F,
-    ) -> RedisResult<String>
-    where
-        F: Fn() -> Result<String, RedisError>;
-    /// raw_get returns the value store in cache indexed by the key, no matter if the key locked or not
-    fn raw_get(&self, key: String) -> RedisResult<String>;
-    /// raw_set sets the value store in cache indexed by the key, no matter if the key locked or not
-    fn raw_set(&self, key: String, value: String, expire: Duration) -> RedisResult<()>;
-    /// lock_for_update locks the key, used in very strict strong consistency mode
-    fn lock_for_update(&self, key: String, owner: String) -> RedisResult<()>;
-    /// unlock_for_update unlocks the key, used in very strict strong consistency mode
-    fn unlock_for_update(&self, key: String, owner: String) -> RedisResult<()>;
-}
+// pub trait RocksCacheClient {
+/// new return a new rockscache client
+/// for each key, rockscache client store a hash set,
+/// the hash set contains the following fields:
+///
+/// value: the value of the key
+///
+/// lockUntil: the time when the lock is released.
+///
+/// lockOwner: the owner of the lock.
+///
+/// if a thread query the cache for data, and no cache exists, it will lock the key before querying data in DB
+//      fn new<T: IntoConnectionInfo + Send>(info: T, options: Options) -> Self;
+/// tag_as_deleted a key, the key will expire after delay time.
+//      fn tag_as_deleted(&self, key: &str) -> Result<bool, Arc<dyn std::error::Error>>;
+/// fetch returns the value store in cache indexed by the key.
+/// If the key doest not exists, call fn to get result, store it in cache, then return.
+//     fn fetch<F>(
+//         &self,
+//         key: &str,
+//         expire: Duration,
+//         func: F,
+//     ) -> Result<Arc<str>, Arc<dyn std::error::Error>>
+//     where
+//         F: 'static + Send + Fn() -> Result<Arc<str>, Arc<dyn std::error::Error>>;
+//     fn _strong_fetch<F>(
+//         &self,
+//         key: &str,
+//         ex: Duration,
+//         func: F,
+//     ) -> Result<Arc<str>, Arc<dyn std::error::Error>>
+//     where
+//         F: Fn() -> Result<Arc<str>, Arc<dyn std::error::Error>>;
+//     fn _weak_fetch<F>(
+//         &self,
+//         key: &str,
+//         ex: Duration,
+//         func: F,
+//     ) -> Result<Arc<str>, Arc<dyn std::error::Error>>
+//     where
+//         F: 'static + Send + Fn() -> Result<Arc<str>, Arc<dyn std::error::Error>>;
+//     fn _lua_get<T>(&self, key: &str, owner: &str) -> RedisResult<T>
+//     where
+//         T: FromRedisValue;
+//     fn _lua_set(
+//         &self,
+//         key: &str,
+//         value: &str,
+//         expire: i32,
+//         owner: &str,
+//     ) -> Result<bool, Arc<dyn std::error::Error>>;
+//     fn _fetch_new<F>(
+//         &self,
+//         key: &str,
+//         ex: Duration,
+//         owner: &str,
+//         func: F,
+//     ) -> Result<Arc<str>, Arc<dyn std::error::Error>>
+//     where
+//         F: Fn() -> Result<Arc<str>, Arc<dyn std::error::Error>>;
+//     /// raw_get returns the value store in cache indexed by the key, no matter if the key locked or not
+//     fn raw_get(&self, key: &str) -> Result<Arc<str>, Arc<dyn std::error::Error>>;
+//     /// raw_set sets the value store in cache indexed by the key, no matter if the key locked or not
+//     fn raw_set(
+//         &self,
+//         key: &str,
+//         value: &str,
+//         expire: Duration,
+//     ) -> Result<bool, Arc<dyn std::error::Error>>;
+//     /// lock_for_update locks the key, used in very strict strong consistency mode
+//     fn lock_for_update(&self, key: &str, owner: &str) -> Result<bool, Arc<dyn std::error::Error>>;
+//     /// unlock_for_update unlocks the key, used in very strict strong consistency mode
+//     fn unlock_for_update(&self, key: &str, owner: &str)
+//         -> Result<bool, Arc<dyn std::error::Error>>;
+// }
 
-pub trait RocksCacheBatch {
-    fn _lua_get_batch<T: FromRedisValue>(
-        &self,
-        keys: Vec<String>,
-        owner: String,
-    ) -> RedisResult<Vec<T>>;
-    fn _lua_set_batch(
-        &self,
-        keys: Vec<String>,
-        values: Vec<String>,
-        expires: Vec<i32>,
-        owner: String,
-    ) -> RedisResult<()>;
-    fn _fetch_batch<F>(
-        &self,
-        keys: Vec<String>,
-        idxs: Vec<usize>,
-        expire: Duration,
-        owner: String,
-        func: F,
-    ) -> RedisResult<HashMap<usize, String>>
-    where
-        F: Fn(Vec<usize>) -> RedisResult<HashMap<usize, String>>;
-    fn _keys_idx(&self, keys: Vec<String>) -> Vec<usize>;
-    fn _weak_fetch_batch<F>(
-        &self,
-        keys: Vec<String>,
-        expire: Duration,
-        func: F,
-    ) -> RedisResult<HashMap<usize, String>>
-    where
-        F: 'static + Send + Clone + Fn(Vec<usize>) -> RedisResult<HashMap<usize, String>>;
-    fn _strong_fetch_batch<F>(
-        &self,
-        keys: Vec<String>,
-        expire: Duration,
-        func: F,
-    ) -> RedisResult<HashMap<usize, String>>
-    where
-        F: Clone + Fn(Vec<usize>) -> RedisResult<HashMap<usize, String>>;
-    /// fetch_batch returns a map with values indexed by index of keys list.
-    /// 1. the first parameter is the keys list of the data
-    /// 2. the second parameter is the data expiration time
-    /// 3. the third parameter is the batch data fetch fntion which is called when the cache does not exist
-    ///
-    /// the parameter of the batch data fetch fntion is the index list of those keys
-    /// missing in cache, which can be used to form a batch query for missing data.
-    ///
-    /// the return value of the batch data fetch fntion is a map, with key of the
-    /// index and value of the corresponding data in form of String
-    fn fetch_batch<F>(
-        &self,
-        keys: Vec<String>,
-        expire: Duration,
-        func: F,
-    ) -> RedisResult<HashMap<usize, String>>
-    where
-        F: 'static + Send + Clone + Fn(Vec<usize>) -> RedisResult<HashMap<usize, String>>;
-    /// tag_as_deleted_batch a key list, the keys in list will expire after delay time.
-    fn tag_as_deleted_batch(&self, keys: Vec<String>) -> RedisResult<()>;
-}
+// pub trait RocksCacheBatch {
+//     fn _lua_get_batch<T: FromRedisValue>(
+//         &self,
+//         keys: [&str],
+//         owner: &str,
+//     ) -> Result<Arc<[T]>, Arc<dyn std::error::Error>>;
+//     fn _lua_set_batch(
+//         &self,
+//         keys: [&str],
+//         values: [&str],
+//         expires: [i32],
+//         owner: &str,
+//     ) -> Result<bool, Arc<dyn std::error::Error>>;
+//     fn _fetch_batch<F>(
+//         &self,
+//         keys: [&str],
+//         idxs: [usize],
+//         expire: Duration,
+//         owner: Arc<str>,
+//         func: F,
+//     ) -> Result<HashMap<usize, Arc<str>>, Arc<dyn std::error::Error>>
+//     where
+//         F: Fn(Vec<usize>) -> Result<HashMap<usize, Arc<str>>, Arc<dyn std::error::Error>>;
+//     fn _keys_idx(&self, keys: Vec<Arc<str>>) -> [usize];
+//     fn _weak_fetch_batch<F>(
+//         &self,
+//         keys: [&str],
+//         expire: Duration,
+//         func: F,
+//     ) -> Result<HashMap<usize, Arc<str>>, Arc<dyn std::error::Error>>
+//     where
+//         F: 'static
+//             + Send
+//             + Clone
+//             + Fn(Arc<[usize]>) -> Result<HashMap<usize, Arc<str>>, Arc<dyn std::error::Error>>;
+//     fn _strong_fetch_batch<F>(
+//         &self,
+//         keys: [&str],
+//         expire: Duration,
+//         func: F,
+//     ) -> Result<HashMap<usize, Arc<str>>, Arc<dyn std::error::Error>>
+//     where
+//         F: Clone + Fn(&[usize]) -> Result<HashMap<usize, Arc<str>>, Arc<dyn std::error::Error>>;
+//     /// fetch_batch returns a map with values indexed by index of keys list.
+//     /// 1. the first parameter is the keys list of the data
+//     /// 2. the second parameter is the data expiration time
+//     /// 3. the third parameter is the batch data fetch fntion which is called when the cache does not exist
+//     ///
+//     /// the parameter of the batch data fetch fntion is the index list of those keys
+//     /// missing in cache, which can be used to form a batch query for missing data.
+//     ///
+//     /// the return value of the batch data fetch fntion is a map, with key of the
+//     /// index and value of the corresponding data in form of String
+//     fn fetch_batch<F>(
+//         &self,
+//         keys: [&str],
+//         expire: Duration,
+//         func: F,
+//     ) -> Result<HashMap<usize, Arc<str>>, Arc<dyn std::error::Error>>
+//     where
+//         F: 'static
+//             + Send
+//             + Clone
+//             + Fn(Arc<[usize]>) -> Result<HashMap<usize, Arc<str>>, Arc<dyn std::error::Error>>;
+//     /// tag_as_deleted_batch a key list, the keys in list will expire after delay time.
+//     fn tag_as_deleted_batch(&self, keys: [&str]) -> RedisResult<()>;
+// }
 
 pub enum LockableValue<T> {
     /// `lockUntil == nil` lock not set

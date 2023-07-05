@@ -25,13 +25,14 @@ exclude = [
 
 
 [dependencies]
+anyhow = "1"
 bb8-redis = {version="0.13", optional=true}
 r2d2 = { version = "0.8", optional=true}
 rand = "0.8"
-redis = {version="0.23", features=["r2d2"]}
+redis = {version="0.23", features=[]}
 threadpool = { version = "1.8", optional=true }
 tracing = { version = "0.1", features=["log"]}
-tokio = {version = "1", default-features = false, features = ["rt"], optional=true}
+tokio = {version = "1", default-features = false, features = ["rt", "macros"], optional=true}
 uuid = { version = "1", features=["v4"] }
 
 singleflight = {path="singleflight"}
@@ -40,6 +41,8 @@ singleflight = {path="singleflight"}
 tracing-test = "0.2"
 
 [features]
-async = ["dep:tokio", "dep:bb8-redis"]
-thread = ["dep:threadpool", "dep:r2d2"]
+cluster = ["redis/cluster"]
+cluster-async = ["redis/cluster-async"]
+async = ["dep:tokio", "dep:bb8-redis", "redis/tokio-rustls-comp"]
+thread = ["dep:threadpool", "dep:r2d2", "redis/r2d2"]
 default = ["thread"]

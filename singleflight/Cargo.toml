@@ -8,8 +8,10 @@ publish = false
 
 
 [dependencies]
+anyhow = "1"
 parking_lot = "0.12"
 tracing = { version="0.1", features=["log"] }
 
 [dev-dependencies]
 tracing-test = "0.2"
+tokio = { version="1", features=["rt", "macros"] }
